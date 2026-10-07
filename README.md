@@ -16,7 +16,7 @@ MCP Adapter bridges WordPress's [Abilities API](https://developer.wordpress.org/
 
 - **Ability-to-MCP conversion** — WordPress abilities automatically become MCP [tools](https://modelcontextprotocol.io/specification/2026-07-28/server/tools), [resources](https://modelcontextprotocol.io/specification/2026-07-28/server/resources), and [prompts](https://modelcontextprotocol.io/specification/2026-07-28/server/prompts)
 - **Multi-server management** — run multiple MCP servers, each with its own transports, abilities, and handlers
-- **HTTP and STDIO transports**, plus a `McpTransportInterface` for custom protocols — see [Custom Transports](docs/guides/custom-transports.md)
+- **HTTP and STDIO transports**, plus a `McpTransportInterface` for custom protocols — HTTP supports both WordPress Application Passwords and built-in OAuth 2.1 Bearer authentication — see [Custom Transports](docs/guides/custom-transports.md)
 - **Pluggable error handling and observability** — swap in your own logging or monitoring via `McpErrorHandlerInterface` and `McpObservabilityHandlerInterface` — see [Error Handling](docs/guides/error-handling.md) and [Observability](docs/guides/observability.md)
 - **Granular permissions** — per-server transport authentication and per-ability permission checks — see [Transport Permissions](docs/guides/transport-permissions.md)
 
@@ -32,7 +32,7 @@ WordPress abilities are private by default. Set `meta.public` (or `meta.mcp.publ
 
 ## Connecting MCP Clients
 
-Connect via WP-CLI over STDIO, or point an HTTP client at `/wp-json/mcp/mcp-adapter-default-server`. Configuration examples for Claude Desktop and other MCP clients — both direct STDIO and HTTP-via-proxy — are in the [CLI Usage Guide](docs/guides/cli-usage.md).
+Connect via WP-CLI over STDIO, or point an HTTP client at `/wp-json/mcp/mcp-adapter-default-server`. HTTP clients can authenticate with an existing WordPress Application Password or use the adapter's built-in OAuth 2.1 Authorization Code + PKCE flow. Configuration examples for Claude Desktop and other MCP clients — both direct STDIO and HTTP-via-proxy — are in the [CLI Usage Guide](docs/guides/cli-usage.md).
 
 ## Migration
 
