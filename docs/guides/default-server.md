@@ -112,6 +112,34 @@ Every HTTP client must complete an initialization handshake before sending any o
 3. **Include the header on every subsequent request** — All following `POST` and `DELETE` requests must include the `Mcp-Session-Id` header with the stored value. (The MCP specification also requires the header on `GET` requests for SSE streaming, but SSE is not yet implemented — `GET` currently returns `405 Method Not Allowed`.)
 4. **Terminate when done** — Send a `DELETE` request with the `Mcp-Session-Id` header to clean up the session.
 
+### OAuth authentication
+
+The HTTP transport supports two WordPress-native authentication methods:
+
+- **Application Passwords** using the existing WordPress Basic authentication flow.
+- **OAuth 2.1 Bearer tokens** issued by MCP Adapter itself.
+
+OAuth uses the WordPress account as the identity source. The authorization screen uses the normal WordPress login, and issued bearer tokens resolve directly to the authorized `WP_User`. WordPress roles, capabilities, transport permissions, and individual Ability `permission_callback` checks continue to control authorization.
+
+OAuth discovery and endpoints:
+
+```text
+/.well-known/oauth-protected-resource
+/.well-known/oauth-authorization-server
+/oauth/register
+/oauth/authorize
+/oauth/token
+/oauth/revoke
+```
+
+The built-in flow uses Authorization Code + PKCE `S256`, supports public-client Dynamic Client Registration and HTTPS Client ID Metadata Documents, and binds issued tokens to the default MCP resource:
+
+```text
+/wp-json/mcp/mcp-adapter-default-server
+```
+
+Unauthenticated MCP requests return HTTP 401 with a Bearer challenge containing the protected-resource metadata URL. Existing Application Password clients do not need to change.
+
 ### Curl example
 
 ```bash
@@ -204,7 +232,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | \
 - **Server ID**: `mcp-adapter-default-server`
 - **Endpoint**: `/wp-json/mcp/mcp-adapter-default-server`
 - **Transport**: HTTP (MCP Streamable HTTP compliant)
-- **Authentication**: Requires logged-in WordPress user with `read` capability (customizable via filters)
+- **Authentication**: WordPress Application Password or built-in OAuth 2.1 Bearer token; the resulting WordPress user must have the required capability (customizable via filters)
 
 ### Default Configuration
 
