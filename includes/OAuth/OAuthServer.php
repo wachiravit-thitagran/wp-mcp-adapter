@@ -48,9 +48,9 @@ final class OAuthServer {
 	}
 
 	/**
-	 * Register OAuth hooks.
+	 * Register OAuth hooks when the singleton is first created.
 	 */
-	public function init(): void {
+	private function __construct() {
 		add_filter( 'determine_current_user', array( $this, 'authenticate_bearer_token' ), 19 );
 		add_action( 'parse_request', array( $this, 'maybe_handle_oauth_route' ), 1 );
 		add_filter( 'rest_post_dispatch', array( $this, 'add_bearer_challenge' ), 10, 3 );
