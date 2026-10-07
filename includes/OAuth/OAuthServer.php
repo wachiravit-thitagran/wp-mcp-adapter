@@ -24,10 +24,13 @@ defined( 'ABSPATH' ) || exit;
  */
 final class OAuthServer {
 
-	private const ACCESS_TTL  = HOUR_IN_SECONDS;
-	private const REFRESH_TTL = 30 * DAY_IN_SECONDS;
-	private const CODE_TTL    = 5 * MINUTE_IN_SECONDS;
-	private const SCOPE       = 'mcp:access';
+	private const ACCESS_TTL      = HOUR_IN_SECONDS;
+	private const REFRESH_TTL     = 30 * DAY_IN_SECONDS;
+	private const CODE_TTL        = 5 * MINUTE_IN_SECONDS;
+	private const CLIENT_TTL      = 30 * DAY_IN_SECONDS;
+	private const DCR_RATE_LIMIT  = 20;
+	private const DCR_RATE_WINDOW = HOUR_IN_SECONDS;
+	private const SCOPE           = 'mcp:access';
 
 	/**
 	 * Singleton.
@@ -71,6 +74,20 @@ final class OAuthServer {
 	}
 
 	/**
+	 * Protected Resource Metadata URL for the default MCP resource.
+	 */
+	public static function protected_resource_metadata_url(): string {
+		return self::well_known_url( 'oauth-protected-resource', self::resource_url() );
+	}
+
+	/**
+	 * Authorization Server Metadata URL for this WordPress site.
+	 */
+	public static function authorization_server_metadata_url(): string {
+		return self::well_known_url( 'oauth-authorization-server', self::issuer() );
+	}
+
+	/**
 	 * Resolve a Bearer token to a WordPress user.
 	 *
 	 * Existing WordPress authentication, including Application Passwords and
@@ -81,6 +98,10 @@ final class OAuthServer {
 	 */
 	public function authenticate_bearer_token( $user_id ) {
 		if ( $user_id ) {
+			return $user_id;
+		}
+
+		if ( ! $this->is_default_mcp_resource_request() ) {
 			return $user_id;
 		}
 
@@ -110,11 +131,11 @@ final class OAuthServer {
 		if (
 			$response instanceof WP_REST_Response
 			&& 401 === $response->get_status()
-			&& false !== strpos( $request->get_route(), '/mcp/' )
+			&& '/mcp/mcp-adapter-default-server' === untrailingslashit( $request->get_route() )
 		) {
 			$response->header(
 				'WWW-Authenticate',
-				'Bearer resource_metadata="' . self::issuer() . '/.well-known/oauth-protected-resource"'
+				'Bearer resource_metadata="' . self::protected_resource_metadata_url() . '"'
 			);
 		}
 
@@ -125,28 +146,19 @@ final class OAuthServer {
 	 * Handle OAuth and discovery routes before template dispatch.
 	 */
 	public function maybe_handle_oauth_route(): void {
-		$path = wp_parse_url( isset( $_SERVER['REQUEST_URI'] ) ? wp_unslash( $_SERVER['REQUEST_URI'] ) : '/', PHP_URL_PATH );
-		$path = '/' . ltrim( (string) $path, '/' );
+		$path = $this->request_path();
 
-		switch ( untrailingslashit( $path ) ) {
-			case '/.well-known/oauth-protected-resource':
-				$this->protected_resource_metadata();
-				break;
-			case '/.well-known/oauth-authorization-server':
-				$this->authorization_server_metadata();
-				break;
-			case '/oauth/register':
-				$this->register_client();
-				break;
-			case '/oauth/authorize':
-				$this->authorize();
-				break;
-			case '/oauth/token':
-				$this->token();
-				break;
-			case '/oauth/revoke':
-				$this->revoke();
-				break;
+		$routes = array(
+			$this->url_path( self::protected_resource_metadata_url() ) => 'protected_resource_metadata',
+			$this->url_path( self::authorization_server_metadata_url() ) => 'authorization_server_metadata',
+			$this->url_path( home_url( '/oauth/register' ) ) => 'register_client',
+			$this->url_path( home_url( '/oauth/authorize' ) ) => 'authorize',
+			$this->url_path( home_url( '/oauth/token' ) ) => 'token',
+			$this->url_path( home_url( '/oauth/revoke' ) ) => 'revoke',
+		);
+
+		if ( isset( $routes[ $path ] ) ) {
+			$this->{$routes[ $path ]}();
 		}
 	}
 
@@ -176,10 +188,10 @@ final class OAuthServer {
 		$this->json(
 			array(
 				'issuer'                                         => $issuer,
-				'authorization_endpoint'                         => $issuer . '/oauth/authorize',
-				'token_endpoint'                                 => $issuer . '/oauth/token',
-				'registration_endpoint'                          => $issuer . '/oauth/register',
-				'revocation_endpoint'                            => $issuer . '/oauth/revoke',
+				'authorization_endpoint'                         => home_url( '/oauth/authorize' ),
+				'token_endpoint'                                 => home_url( '/oauth/token' ),
+				'registration_endpoint'                          => home_url( '/oauth/register' ),
+				'revocation_endpoint'                            => home_url( '/oauth/revoke' ),
 				'response_types_supported'                       => array( 'code' ),
 				'grant_types_supported'                          => array( 'authorization_code', 'refresh_token' ),
 				'code_challenge_methods_supported'               => array( 'S256' ),
@@ -196,6 +208,10 @@ final class OAuthServer {
 	 */
 	private function register_client(): void {
 		$this->require_method( 'POST' );
+
+		if ( ! $this->consume_dcr_rate_limit() ) {
+			$this->oauth_error( 'temporarily_unavailable', 'Too many client registration requests.', 429 );
+		}
 
 		$input = json_decode( (string) file_get_contents( 'php://input' ), true );
 		if ( ! is_array( $input ) ) {
@@ -216,7 +232,7 @@ final class OAuthServer {
 			'created_at'    => time(),
 		);
 
-		update_option( $this->client_option_name( $client_id ), $record, false );
+		set_transient( $this->client_option_name( $client_id ), $record, self::CLIENT_TTL );
 
 		$this->json(
 			array(
@@ -376,7 +392,7 @@ final class OAuthServer {
 			$this->oauth_error( 'invalid_grant', 'Refresh token is invalid or expired.', 400 );
 		}
 
-		delete_option( $this->token_option_name( $refresh_token ) );
+		delete_transient( $this->token_option_name( $refresh_token ) );
 		$this->issue_token_pair( (int) $record['user_id'], $client_id, $resource );
 	}
 
@@ -388,7 +404,7 @@ final class OAuthServer {
 
 		$token = isset( $_POST['token'] ) ? sanitize_text_field( wp_unslash( $_POST['token'] ) ) : '';
 		if ( '' !== $token ) {
-			delete_option( $this->token_option_name( $token ) );
+			delete_transient( $this->token_option_name( $token ) );
 		}
 
 		status_header( 200 );
@@ -450,12 +466,12 @@ final class OAuthServer {
 	 * @return array<string, mixed>|WP_Error
 	 */
 	private function get_client( string $client_id ) {
-		$registered = get_option( $this->client_option_name( $client_id ) );
+		$registered = get_transient( $this->client_option_name( $client_id ) );
 		if ( is_array( $registered ) ) {
 			return $registered;
 		}
 
-		if ( ! wp_http_validate_url( $client_id ) || 'https' !== wp_parse_url( $client_id, PHP_URL_SCHEME ) ) {
+		if ( ! $this->valid_cimd_client_id( $client_id ) ) {
 			return new WP_Error( 'unauthorized_client', 'Unknown OAuth client.' );
 		}
 
@@ -472,8 +488,17 @@ final class OAuthServer {
 			return new WP_Error( 'unauthorized_client', 'Unable to load client metadata.' );
 		}
 
-		$metadata      = json_decode( wp_remote_retrieve_body( $response ), true );
-		$redirect_uris = is_array( $metadata ) && isset( $metadata['redirect_uris'] ) && is_array( $metadata['redirect_uris'] )
+		$metadata = json_decode( wp_remote_retrieve_body( $response ), true );
+		if (
+			! is_array( $metadata )
+			|| ! isset( $metadata['client_id'] )
+			|| ! is_string( $metadata['client_id'] )
+			|| ! hash_equals( $client_id, $metadata['client_id'] )
+		) {
+			return new WP_Error( 'unauthorized_client', 'Client metadata client_id does not match the metadata document URL.' );
+		}
+
+		$redirect_uris = isset( $metadata['redirect_uris'] ) && is_array( $metadata['redirect_uris'] )
 			? $this->sanitize_redirect_uris( $metadata['redirect_uris'] )
 			: array();
 
@@ -513,7 +538,7 @@ final class OAuthServer {
 	 * Store a token record. Raw tokens are never persisted.
 	 */
 	private function store_token( string $token, string $type, int $user_id, string $client_id, string $resource, int $ttl ): void {
-		update_option(
+		set_transient(
 			$this->token_option_name( $token ),
 			array(
 				'type'      => $type,
@@ -523,7 +548,7 @@ final class OAuthServer {
 				'scope'     => self::SCOPE,
 				'expires'   => time() + $ttl,
 			),
-			false
+			$ttl
 		);
 	}
 
@@ -538,11 +563,11 @@ final class OAuthServer {
 		}
 
 		$name   = $this->token_option_name( $token );
-		$record = get_option( $name );
+		$record = get_transient( $name );
 
 		if ( ! is_array( $record ) || $type !== ( $record['type'] ?? '' ) || time() >= (int) ( $record['expires'] ?? 0 ) ) {
 			if ( is_array( $record ) ) {
-				delete_option( $name );
+				delete_transient( $name );
 			}
 			return null;
 		}
@@ -586,7 +611,7 @@ final class OAuthServer {
 	<h1><?php esc_html_e( 'Authorize MCP Client', 'mcp-adapter' ); ?></h1>
 	<p><?php /* translators: 1: OAuth client name, 2: WordPress user display name. */ echo esc_html( sprintf( __( '%1$s wants to access this WordPress MCP server as %2$s.', 'mcp-adapter' ), $name, $user->display_name ) ); ?></p>
 	<p><?php esc_html_e( 'The client receives MCP access with the same WordPress capabilities as this account. WordPress capability and Ability permission checks still apply.', 'mcp-adapter' ); ?></p>
-	<form method="post" action="<?php echo esc_url( self::issuer() . '/oauth/authorize' ); ?>">
+	<form method="post" action="<?php echo esc_url( home_url( '/oauth/authorize' ) ); ?>">
 		<?php foreach ( $request as $field => $value ) : ?>
 			<input type="hidden" name="<?php echo esc_attr( $field ); ?>" value="<?php echo esc_attr( $value ); ?>">
 		<?php endforeach; ?>
@@ -664,6 +689,37 @@ final class OAuthServer {
 	}
 
 	/**
+	 * Validate a Client ID Metadata Document URL.
+	 */
+	private function valid_cimd_client_id( string $client_id ): bool {
+		if ( ! wp_http_validate_url( $client_id ) || 'https' !== wp_parse_url( $client_id, PHP_URL_SCHEME ) ) {
+			return false;
+		}
+
+		if ( null !== wp_parse_url( $client_id, PHP_URL_USER ) || null !== wp_parse_url( $client_id, PHP_URL_PASS ) || null !== wp_parse_url( $client_id, PHP_URL_FRAGMENT ) ) {
+			return false;
+		}
+
+		return '' !== trim( (string) wp_parse_url( $client_id, PHP_URL_PATH ), '/' );
+	}
+
+	/**
+	 * Limit unauthenticated Dynamic Client Registration writes.
+	 */
+	private function consume_dcr_rate_limit(): bool {
+		$address = isset( $_SERVER['REMOTE_ADDR'] ) ? sanitize_text_field( wp_unslash( $_SERVER['REMOTE_ADDR'] ) ) : 'unknown';
+		$key     = 'mcp_oauth_dcr_rate_' . hash( 'sha256', $address );
+		$count   = (int) get_transient( $key );
+
+		if ( $count >= self::DCR_RATE_LIMIT ) {
+			return false;
+		}
+
+		set_transient( $key, $count + 1, self::DCR_RATE_WINDOW );
+		return true;
+	}
+
+	/**
 	 * Authorization header.
 	 */
 	private function authorization_header(): string {
@@ -685,11 +741,51 @@ final class OAuthServer {
 	 * Current request URL.
 	 */
 	private function current_url(): string {
-		$scheme = is_ssl() ? 'https' : 'http';
-		$host   = isset( $_SERVER['HTTP_HOST'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_HOST'] ) ) : (string) wp_parse_url( home_url(), PHP_URL_HOST );
-		$uri    = isset( $_SERVER['REQUEST_URI'] ) ? wp_unslash( $_SERVER['REQUEST_URI'] ) : '/';
+		$request_uri = isset( $_SERVER['REQUEST_URI'] ) ? wp_unslash( $_SERVER['REQUEST_URI'] ) : '/';
+		$query       = (string) wp_parse_url( $request_uri, PHP_URL_QUERY );
+		$url         = home_url( $this->request_path() );
 
-		return $scheme . '://' . $host . $uri;
+		return '' === $query ? $url : $url . '?' . $query;
+	}
+
+	/**
+	 * Return the normalized current request path.
+	 */
+	private function request_path(): string {
+		$path = wp_parse_url( isset( $_SERVER['REQUEST_URI'] ) ? wp_unslash( $_SERVER['REQUEST_URI'] ) : '/', PHP_URL_PATH );
+		return untrailingslashit( '/' . ltrim( (string) $path, '/' ) );
+	}
+
+	/**
+	 * Return the normalized path component for a URL.
+	 */
+	private function url_path( string $url ): string {
+		return untrailingslashit( '/' . ltrim( (string) wp_parse_url( $url, PHP_URL_PATH ), '/' ) );
+	}
+
+	/**
+	 * Determine whether the current HTTP request is the default MCP resource.
+	 */
+	private function is_default_mcp_resource_request(): bool {
+		$rest_route = isset( $_GET['rest_route'] ) ? untrailingslashit( '/' . ltrim( sanitize_text_field( wp_unslash( $_GET['rest_route'] ) ), '/' ) ) : '';
+		if ( '/mcp/mcp-adapter-default-server' === $rest_route ) {
+			return true;
+		}
+
+		return $this->url_path( self::resource_url() ) === $this->request_path();
+	}
+
+	/**
+	 * Build a well-known metadata URL for an issuer or protected resource with a path.
+	 */
+	private static function well_known_url( string $name, string $target ): string {
+		$scheme = (string) wp_parse_url( $target, PHP_URL_SCHEME );
+		$host   = (string) wp_parse_url( $target, PHP_URL_HOST );
+		$port   = wp_parse_url( $target, PHP_URL_PORT );
+		$path   = trim( (string) wp_parse_url( $target, PHP_URL_PATH ), '/' );
+		$base   = $scheme . '://' . $host . ( null !== $port ? ':' . $port : '' );
+
+		return $base . '/.well-known/' . $name . ( '' !== $path ? '/' . $path : '' );
 	}
 
 	/**
