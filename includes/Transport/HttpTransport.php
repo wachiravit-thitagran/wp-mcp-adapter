@@ -126,7 +126,6 @@ class HttpTransport implements McpRestTransportInterface {
 			$user_capability = 'read';
 		}
 
-
 		$user_has_capability = current_user_can( $user_capability ); // phpcs:ignore WordPress.WP.Capabilities.Undetermined -- Capability is filtered and defaults to 'read'
 
 		if ( ! $user_has_capability ) {
