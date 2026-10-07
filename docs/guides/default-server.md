@@ -121,10 +121,10 @@ The HTTP transport supports two WordPress-native authentication methods:
 
 OAuth uses the WordPress account as the identity source. The authorization screen uses the normal WordPress login, and issued bearer tokens resolve directly to the authorized `WP_User`. WordPress roles, capabilities, transport permissions, and individual Ability `permission_callback` checks continue to control authorization.
 
-OAuth discovery and endpoints:
+OAuth discovery and endpoints are generated from the site's canonical WordPress URLs. On a root installation they include:
 
 ```text
-/.well-known/oauth-protected-resource
+/.well-known/oauth-protected-resource/wp-json/mcp/mcp-adapter-default-server
 /.well-known/oauth-authorization-server
 /oauth/register
 /oauth/authorize
@@ -132,7 +132,9 @@ OAuth discovery and endpoints:
 /oauth/revoke
 ```
 
-The built-in flow uses Authorization Code + PKCE `S256`, supports public-client Dynamic Client Registration and HTTPS Client ID Metadata Documents, and binds issued tokens to the default MCP resource:
+For WordPress installations under a subdirectory, the RFC well-known metadata URLs retain the issuer or protected-resource path instead of assuming the site lives at the origin root.
+
+The built-in flow uses Authorization Code + PKCE `S256`, supports rate-limited public-client Dynamic Client Registration and HTTPS Client ID Metadata Documents, and binds issued tokens to the default MCP resource. Access tokens, refresh tokens, and dynamically registered clients are stored as expiring WordPress transients rather than permanent options:
 
 ```text
 /wp-json/mcp/mcp-adapter-default-server
