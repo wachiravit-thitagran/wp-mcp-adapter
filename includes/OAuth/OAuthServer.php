@@ -743,7 +743,11 @@ final class OAuthServer {
 	private function current_url(): string {
 		$request_uri = isset( $_SERVER['REQUEST_URI'] ) ? wp_unslash( $_SERVER['REQUEST_URI'] ) : '/';
 		$query       = (string) wp_parse_url( $request_uri, PHP_URL_QUERY );
-		$url         = home_url( $this->request_path() );
+		$home        = home_url( '/' );
+		$scheme      = (string) wp_parse_url( $home, PHP_URL_SCHEME );
+		$host        = (string) wp_parse_url( $home, PHP_URL_HOST );
+		$port        = wp_parse_url( $home, PHP_URL_PORT );
+		$url         = $scheme . '://' . $host . ( null !== $port ? ':' . $port : '' ) . $this->request_path();
 
 		return '' === $query ? $url : $url . '?' . $query;
 	}
