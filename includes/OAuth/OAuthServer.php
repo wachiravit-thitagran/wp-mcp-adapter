@@ -202,8 +202,7 @@ final class OAuthServer {
 			$this->oauth_error( 'invalid_client_metadata', 'A JSON client metadata document is required.', 400 );
 		}
 
-		$redirect_uris = isset( $input['redirect_uris'] ) && is_array( $input['redirect_uris'] ) ? $input['redirect_uris'] : array();
-		$redirect_uris = array_values( array_filter( array_map( 'esc_url_raw', $redirect_uris ), array( $this, 'valid_redirect_uri' ) ) );
+		$redirect_uris = isset( $input['redirect_uris'] ) && is_array( $input['redirect_uris'] ) ? $this->sanitize_redirect_uris( $input['redirect_uris'] ) : array();
 
 		if ( empty( $redirect_uris ) ) {
 			$this->oauth_error( 'invalid_redirect_uri', 'At least one valid redirect URI is required.', 400 );
@@ -335,6 +334,9 @@ final class OAuthServer {
 		}
 
 		delete_transient( $transient );
+		if ( '' === $resource ) {
+			$resource = (string) $record['resource'];
+		}
 
 		if (
 			! hash_equals( (string) $record['client_id'], $client_id )
@@ -362,6 +364,9 @@ final class OAuthServer {
 		$client_id     = isset( $params['client_id'] ) ? sanitize_text_field( $params['client_id'] ) : '';
 		$resource      = isset( $params['resource'] ) ? esc_url_raw( $params['resource'] ) : '';
 		$record        = $this->get_token_record( $refresh_token, 'refresh' );
+		if ( null !== $record && '' === $resource ) {
+			$resource = (string) $record['resource'];
+		}
 
 		if (
 			null === $record
@@ -430,7 +435,8 @@ final class OAuthServer {
 			return $client;
 		}
 
-		if ( ! in_array( $data['redirect_uri'], $client['redirect_uris'], true ) ) {
+		$redirect_uris = isset( $client['redirect_uris'] ) && is_array( $client['redirect_uris'] ) ? $client['redirect_uris'] : array();
+		if ( ! in_array( $data['redirect_uri'], $redirect_uris, true ) ) {
 			return new WP_Error( 'invalid_redirect_uri', 'The redirect URI is not registered for this client.' );
 		}
 
@@ -468,7 +474,7 @@ final class OAuthServer {
 
 		$metadata      = json_decode( wp_remote_retrieve_body( $response ), true );
 		$redirect_uris = is_array( $metadata ) && isset( $metadata['redirect_uris'] ) && is_array( $metadata['redirect_uris'] )
-			? array_values( array_filter( array_map( 'esc_url_raw', $metadata['redirect_uris'] ), array( $this, 'valid_redirect_uri' ) ) )
+			? $this->sanitize_redirect_uris( $metadata['redirect_uris'] )
 			: array();
 
 		if ( empty( $redirect_uris ) ) {
@@ -578,7 +584,7 @@ final class OAuthServer {
 <body>
 <div class="card">
 	<h1><?php esc_html_e( 'Authorize MCP Client', 'mcp-adapter' ); ?></h1>
-	<p><?php echo esc_html( sprintf( __( '%1$s wants to access this WordPress MCP server as %2$s.', 'mcp-adapter' ), $name, $user->display_name ) ); ?></p>
+	<p><?php /* translators: 1: OAuth client name, 2: WordPress user display name. */ echo esc_html( sprintf( __( '%1$s wants to access this WordPress MCP server as %2$s.', 'mcp-adapter' ), $name, $user->display_name ) ); ?></p>
 	<p><?php esc_html_e( 'The client receives MCP access with the same WordPress capabilities as this account. WordPress capability and Ability permission checks still apply.', 'mcp-adapter' ); ?></p>
 	<form method="post" action="<?php echo esc_url( self::issuer() . '/oauth/authorize' ); ?>">
 		<?php foreach ( $request as $field => $value ) : ?>
@@ -621,21 +627,40 @@ final class OAuthServer {
 	}
 
 	/**
+	 * Sanitize and validate redirect URI metadata.
+	 *
+	 * @param array<mixed> $uris Redirect URI values.
+	 * @return list<string>
+	 */
+	private function sanitize_redirect_uris( array $uris ): array {
+		$valid = array();
+
+		foreach ( $uris as $uri ) {
+			if ( ! is_string( $uri ) ) {
+				continue;
+			}
+
+			$uri = esc_url_raw( $uri );
+			if ( $this->valid_redirect_uri( $uri ) ) {
+				$valid[] = $uri;
+			}
+		}
+
+		return array_values( array_unique( $valid ) );
+	}
+
+	/**
 	 * Validate redirect URI.
 	 */
 	private function valid_redirect_uri( string $uri ): bool {
-		if ( ! wp_http_validate_url( $uri ) ) {
-			return false;
-		}
-
 		$scheme = wp_parse_url( $uri, PHP_URL_SCHEME );
 		$host   = wp_parse_url( $uri, PHP_URL_HOST );
 
-		if ( 'https' === $scheme ) {
+		if ( 'http' === $scheme && in_array( $host, array( '127.0.0.1', 'localhost', '::1' ), true ) ) {
 			return true;
 		}
 
-		return 'http' === $scheme && in_array( $host, array( '127.0.0.1', 'localhost', '::1' ), true );
+		return 'https' === $scheme && false !== wp_http_validate_url( $uri );
 	}
 
 	/**
