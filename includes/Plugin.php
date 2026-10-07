@@ -76,7 +76,7 @@ final class Plugin {
 		// Define the plugin constants.
 		$this->constants();
 
-		OAuthServer::instance()->init();
+		OAuthServer::instance();
 		McpAdapter::instance();
 	}
 
