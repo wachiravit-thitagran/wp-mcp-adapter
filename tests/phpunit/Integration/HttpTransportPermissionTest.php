@@ -74,9 +74,10 @@ final class HttpTransportPermissionTest extends TestCase {
 		$this->assertTrue( $transport->check_permission( $request ) );
 
 		wp_set_current_user( 0 );
-		$this->assertFalse( $transport->check_permission( $request ) );
-		$this->assertCount( 1, DummyErrorHandler::$logs );
-		$this->assertStringContainsString( 'does not have capability "read"', DummyErrorHandler::$logs[0]['message'] );
+		$result = $transport->check_permission( $request );
+		$this->assertWPError( $result );
+		$this->assertSame( 'mcp_adapter_unauthorized', $result->get_error_code() );
+		$this->assertSame( 401, $result->get_error_data()['status'] );
 	}
 
 	/** The capability filter is honored and invalid values fall back to read. */
