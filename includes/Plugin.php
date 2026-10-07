@@ -12,6 +12,7 @@ declare( strict_types=1 );
 namespace WP\MCP;
 
 use WP\MCP\Core\McpAdapter;
+use WP\MCP\OAuth\OAuthServer;
 
 // Exit if accessed directly.
 defined( 'ABSPATH' ) || exit;
@@ -75,6 +76,7 @@ final class Plugin {
 		// Define the plugin constants.
 		$this->constants();
 
+		OAuthServer::instance()->init();
 		McpAdapter::instance();
 	}
 
