@@ -19,7 +19,6 @@ use WP\MCP\Transport\Infrastructure\HttpRequestContext;
 use WP\MCP\Transport\Infrastructure\HttpRequestHandler;
 use WP\MCP\Transport\Infrastructure\McpTransportContext;
 use WP\MCP\Transport\Infrastructure\McpTransportHelperTrait;
-use WP_Error;
 
 // Exit if accessed directly.
 defined( 'ABSPATH' ) || exit;
@@ -76,7 +75,7 @@ class HttpTransport implements McpRestTransportInterface {
 	 *
 	 * @param \WP_REST_Request<array<string, mixed>> $request The request object.
 	 *
-	 * @return bool|WP_Error True when allowed, or an authentication/permission error.
+	 * @return bool True if the user has permission, false otherwise.
 	 */
 	public function check_permission( \WP_REST_Request $request ) {
 		$context = new HttpRequestContext( $request );
@@ -127,13 +126,6 @@ class HttpTransport implements McpRestTransportInterface {
 			$user_capability = 'read';
 		}
 
-		if ( ! is_user_logged_in() ) {
-			return new WP_Error(
-				'mcp_adapter_unauthorized',
-				esc_html__( 'Authentication is required to access this MCP server.', 'mcp-adapter' ),
-				array( 'status' => 401 )
-			);
-		}
 
 		$user_has_capability = current_user_can( $user_capability ); // phpcs:ignore WordPress.WP.Capabilities.Undetermined -- Capability is filtered and defaults to 'read'
 
